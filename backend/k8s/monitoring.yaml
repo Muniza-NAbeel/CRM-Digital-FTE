@@ -1,0 +1,332 @@
+# Customer Success Digital FTE - Monitoring & Observability
+# Prometheus, Grafana, and distributed tracing setup
+
+# ============================================================================
+# SERVICE MONITOR - API
+# ============================================================================
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: api-service-monitor
+  namespace: customer-success-fte
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+      - customer-success-fte
+
+# ============================================================================
+# SERVICE MONITOR - POSTGRES
+# ============================================================================
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: postgres-service-monitor
+  namespace: customer-success-fte
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: postgres
+  endpoints:
+    - port: postgres
+      path: /metrics
+      interval: 30s
+  namespaceSelector:
+    matchNames:
+      - customer-success-fte
+
+# ============================================================================
+# PROMETHEUS RULES - Alerting
+# ============================================================================
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: fte-alerts
+  namespace: customer-success-fte
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: fte.rules
+      rules:
+        # API High Error Rate
+        - alert: APIHighErrorRate
+          expr: |
+            sum(rate(http_requests_total{namespace="customer-success-fte",status=~"5.."}[5m])) 
+            / sum(rate(http_requests_total{namespace="customer-success-fte"}[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "API high error rate detected"
+            description: "Error rate is {{ $value | humanizePercentage }} for API in customer-success-fte namespace"
+
+        # API High Latency
+        - alert: APIHighLatency
+          expr: |
+            histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{namespace="customer-success-fte"}[5m])) by (le)) > 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "API high latency detected"
+            description: "95th percentile latency is {{ $value | humanizeDuration }} for API"
+
+        # Worker Not Processing
+        - alert: WorkerNotProcessing
+          expr: |
+            kafka_consumer_group_lag{namespace="customer-success-fte",consumer_group="digital_fte_worker"} > 1000
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Worker message backlog growing"
+            description: "Kafka consumer lag is {{ $value }} messages"
+
+        # Database Down
+        - alert: DatabaseDown
+          expr: |
+            pg_up{namespace="customer-success-fte"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "PostgreSQL database is down"
+            description: "PostgreSQL instance in customer-success-fte is not responding"
+
+        # Kafka Broker Down
+        - alert: KafkaBrokerDown
+          expr: |
+            kafka_server_brokerstate{namespace="customer-success-fte"} != 3
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Kafka broker is not in running state"
+            description: "Kafka broker state is {{ $value }} (expected: 3)"
+
+        # SLA Breach Rate High
+        - alert: SLABreachRateHigh
+          expr: |
+            sum(rate(tickets_sla_breached_total{namespace="customer-success-fte"}[1h])) > 10
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High SLA breach rate"
+            description: "{{ $value }} SLA breaches per hour"
+
+        # Escalation Rate High
+        - alert: EscalationRateHigh
+          expr: |
+            sum(rate(tickets_escalated_total{namespace="customer-success-fte"}[1h])) > 20
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High ticket escalation rate"
+            description: "{{ $value }} escalations per hour"
+
+# ============================================================================
+# GRAFANA DASHBOARD CONFIGMAP
+# ============================================================================
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-fte
+  namespace: customer-success-fte
+  labels:
+    grafana_dashboard: "1"
+data:
+  fte-overview.json: |
+    {
+      "dashboard": {
+        "title": "Customer Success FTE Overview",
+        "tags": ["fte", "customer-success"],
+        "timezone": "browser",
+        "panels": [
+          {
+            "id": 1,
+            "title": "Tickets Created",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "sum(increase(agent_metrics_tickets_created_total[1h]))",
+                "legendFormat": "Tickets/hour"
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "title": "Response Time (P95)",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{namespace=\"customer-success-fte\"}[5m])) by (le))",
+                "legendFormat": "P95 Latency"
+              }
+            ]
+          },
+          {
+            "id": 3,
+            "title": "Error Rate",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "sum(rate(http_requests_total{namespace=\"customer-success-fte\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{namespace=\"customer-success-fte\"}[5m]))",
+                "legendFormat": "Error Rate"
+              }
+            ]
+          },
+          {
+            "id": 4,
+            "title": "Kafka Consumer Lag",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "kafka_consumer_group_lag{consumer_group=\"digital_fte_worker\"}",
+                "legendFormat": "Lag"
+              }
+            ]
+          },
+          {
+            "id": 5,
+            "title": "AI Token Usage",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "sum(increase(agent_metrics_ai_tokens_total[1h]))",
+                "legendFormat": "Tokens/hour"
+              }
+            ]
+          },
+          {
+            "id": 6,
+            "title": "Escalations",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "sum(increase(agent_metrics_escalations_total[1h]))",
+                "legendFormat": "Escalations/hour"
+              }
+            ]
+          }
+        ],
+        "refresh": "30s",
+        "time": {
+          "from": "now-1h",
+          "to": "now"
+        }
+      }
+    }
+
+# ============================================================================
+# DISTRIBUTED TRACING - Jaeger/Tempo (Optional)
+# ============================================================================
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tracing-config
+  namespace: customer-success-fte
+data:
+  # OpenTelemetry configuration for application
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger-collector:4317"
+  OTEL_SERVICE_NAME: "customer-success-fte"
+  OTEL_RESOURCE_ATTRIBUTES: "deployment.environment=production"
+
+# ============================================================================
+# LOGGING - Loki Stack (Optional)
+# ============================================================================
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-config
+  namespace: customer-success-fte
+data:
+  loki.yaml: |
+    auth_enabled: false
+    server:
+      http_listen_port: 3100
+    common:
+      path_prefix: /loki
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+    schema_config:
+      configs:
+        - from: 2020-10-24
+          store: boltdb-shipper
+          object_store: filesystem
+          schema: v11
+          index:
+            prefix: index_
+            period: 24h
+    limits_config:
+      retention_period: 168h
+
+# ============================================================================
+# VERTICAL POD AUTOSCALER (Optional - for resource optimization)
+# ============================================================================
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: api-vpa
+  namespace: customer-success-fte
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api-deployment
+  updatePolicy:
+    updateMode: Auto
+  resourcePolicy:
+    containerPolicies:
+      - containerName: api
+        minAllowed:
+          cpu: "100m"
+          memory: "256Mi"
+        maxAllowed:
+          cpu: "2000m"
+          memory: "4Gi"
+
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: worker-vpa
+  namespace: customer-success-fte
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker-deployment
+  updatePolicy:
+    updateMode: Auto
+  resourcePolicy:
+    containerPolicies:
+      - containerName: worker
+        minAllowed:
+          cpu: "200m"
+          memory: "512Mi"
+        maxAllowed:
+          cpu: "4000m"
+          memory: "8Gi"

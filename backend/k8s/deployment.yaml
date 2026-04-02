@@ -1,0 +1,629 @@
+# Customer Success Digital FTE - Kubernetes Manifests
+# Production-ready deployment configuration
+
+# ============================================================================
+# NAMESPACE
+# ============================================================================
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: customer-success-fte
+  labels:
+    app: customer-success-fte
+    environment: production
+
+# ============================================================================
+# CONFIGMAP - Application Configuration
+# ============================================================================
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: customer-success-fte
+data:
+  # Application
+  APP_APP_ENV: "production"
+  APP_APP_DEBUG: "false"
+  APP_APP_HOST: "0.0.0.0"
+  APP_APP_PORT: "8000"
+  
+  # Database
+  APP_DB_HOST: "postgres-service"
+  APP_DB_PORT: "5432"
+  APP_DB_NAME: "customer_success_fte"
+  APP_DB_USER: "postgres"
+  APP_DB_SSL_MODE: "disable"
+  APP_DB_MIN_CONNECTIONS: "10"
+  APP_DB_MAX_CONNECTIONS: "50"
+  
+  # Kafka
+  APP_KAFKA_BOOTSTRAP_SERVERS: "kafka-bootstrap:9092"
+  APP_KAFKA_TOPIC_INBOUND: "fte.tickets.incoming"
+  APP_KAFKA_TOPIC_OUTBOUND: "fte.tickets.outgoing"
+  APP_KAFKA_TOPIC_EVENTS: "fte.agent.events"
+  APP_KAFKA_CONSUMER_GROUP_ID: "digital_fte_worker"
+  APP_KAFKA_AUTO_OFFSET_RESET: "earliest"
+  
+  # OpenAI
+  APP_OPENAI_MODEL: "gpt-4"
+  APP_OPENAI_EMBEDDING_MODEL: "text-embedding-3-small"
+  APP_OPENAI_MAX_TOKENS: "1000"
+  APP_OPENAI_TEMPERATURE: "0.7"
+  
+  # Logging
+  APP_LOG_LEVEL: "INFO"
+  APP_LOG_FORMAT: "json"
+  
+  # Feature Flags
+  APP_ENABLE_SENTIMENT_ANALYSIS: "true"
+  APP_ENABLE_AUTO_ESCALATION: "true"
+  APP_ENABLE_KNOWLEDGE_BASE_LEARNING: "true"
+  APP_ENABLE_METRICS_COLLECTION: "true"
+  
+  # SLA Configuration (hours)
+  APP_SLA_FIRST_RESPONSE_STANDARD: "24"
+  APP_SLA_FIRST_RESPONSE_PREMIUM: "4"
+  APP_SLA_FIRST_RESPONSE_ENTERPRISE: "1"
+
+# ============================================================================
+# SECRETS - Sensitive Configuration
+# ============================================================================
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secrets
+  namespace: customer-success-fte
+type: Opaque
+stringData:
+  # Database
+  APP_DB_PASSWORD: "change-me-in-production"
+  
+  # Security
+  APP_SECRET_KEY: "change-me-to-secure-random-string"
+  APP_ALGORITHM: "HS256"
+  
+  # OpenAI
+  APP_OPENAI_API_KEY: "sk-your-openai-api-key-here"
+  
+  # Gmail API (OAuth2)
+  APP_GMAIL_CLIENT_ID: ""
+  APP_GMAIL_CLIENT_SECRET: ""
+  APP_GMAIL_REDIRECT_URI: ""
+  APP_GMAIL_REFRESH_TOKEN: ""
+  
+  # Twilio
+  APP_TWILIO_ACCOUNT_SID: ""
+  APP_TWILIO_AUTH_TOKEN: ""
+  APP_TWILIO_WHATSAPP_NUMBER: ""
+  
+  # CORS
+  APP_CORS_ORIGINS: "https://your-domain.com"
+
+# ============================================================================
+# API DEPLOYMENT
+# ============================================================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-deployment
+  namespace: customer-success-fte
+  labels:
+    app: api
+    component: backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+        component: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: fte-service-account
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: api
+          image: customer-success-fte-api:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: logs
+              mountPath: /app/logs
+      volumes:
+        - name: logs
+          emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: api
+                topologyKey: kubernetes.io/hostname
+
+# ============================================================================
+# API SERVICE
+# ============================================================================
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-service
+  namespace: customer-success-fte
+  labels:
+    app: api
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app: api
+
+# ============================================================================
+# API HPA (Horizontal Pod Autoscaler)
+# ============================================================================
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-hpa
+  namespace: customer-success-fte
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api-deployment
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+      selectPolicy: Max
+
+# ============================================================================
+# WORKER DEPLOYMENT
+# ============================================================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-deployment
+  namespace: customer-success-fte
+  labels:
+    app: worker
+    component: processor
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+        component: processor
+    spec:
+      serviceAccountName: fte-service-account
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: customer-success-fte-worker:latest
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2000m"
+              memory: "2Gi"
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - from src.database import get_db_pool; import asyncio; asyncio.run(get_db_pool())
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            timeoutSeconds: 30
+            failureThreshold: 3
+          volumeMounts:
+            - name: logs
+              mountPath: /app/logs
+      volumes:
+        - name: logs
+          emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: worker
+                topologyKey: kubernetes.io/hostname
+
+# ============================================================================
+# WORKER HPA
+# ============================================================================
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: worker-hpa
+  namespace: customer-success-fte
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker-deployment
+  minReplicas: 2
+  maxReplicas: 50
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 120
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 200
+          periodSeconds: 30
+        - type: Pods
+          value: 10
+          periodSeconds: 30
+      selectPolicy: Max
+
+# ============================================================================
+# SCHEDULER DEPLOYMENT (Lifecycle Scheduler)
+# ============================================================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler-deployment
+  namespace: customer-success-fte
+  labels:
+    app: scheduler
+    component: background
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scheduler
+  template:
+    metadata:
+      labels:
+        app: scheduler
+        component: background
+    spec:
+      serviceAccountName: fte-service-account
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: scheduler
+          image: customer-success-fte-worker:latest
+          imagePullPolicy: Always
+          command:
+            - python
+            - -c
+            - from src.services.scheduler import run_scheduler; import asyncio; asyncio.run(run_scheduler())
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+# ============================================================================
+# INGRESS
+# ============================================================================
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-ingress
+  namespace: customer-success-fte
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+    - hosts:
+        - api.your-domain.com
+      secretName: api-tls-secret
+  rules:
+    - host: api.your-domain.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-service
+                port:
+                  number: 80
+
+# ============================================================================
+# SERVICE ACCOUNT
+# ============================================================================
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fte-service-account
+  namespace: customer-success-fte
+  labels:
+    app: customer-success-fte
+
+# ============================================================================
+# NETWORK POLICY
+# ============================================================================
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-network-policy
+  namespace: customer-success-fte
+spec:
+  podSelector:
+    matchLabels:
+      app: api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8000
+    - from:
+        - podSelector:
+            matchLabels:
+              app: worker
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: kafka
+      ports:
+        - protocol: TCP
+          port: 9092
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+
+# ============================================================================
+# WORKER NETWORK POLICY
+# ============================================================================
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-network-policy
+  namespace: customer-success-fte
+spec:
+  podSelector:
+    matchLabels:
+      app: worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: kafka
+      ports:
+        - protocol: TCP
+          port: 9092
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+
+# ============================================================================
+# POD DISRUPTION BUDGET - API
+# ============================================================================
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-pdb
+  namespace: customer-success-fte
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: api
+
+# ============================================================================
+# POD DISRUPTION BUDGET - WORKER
+# ============================================================================
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: worker-pdb
+  namespace: customer-success-fte
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: worker
+
+# ============================================================================
+# RESOURCE QUOTA
+# ============================================================================
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: fte-resource-quota
+  namespace: customer-success-fte
+spec:
+  hard:
+    requests.cpu: "20"
+    requests.memory: "40Gi"
+    limits.cpu: "40"
+    limits.memory: "80Gi"
+    pods: "100"
+    services: "20"
+    secrets: "20"
+    configmaps: "20"
+
+# ============================================================================
+# LIMIT RANGE
+# ============================================================================
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: fte-limit-range
+  namespace: customer-success-fte
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: "500m"
+        memory: "512Mi"
+      defaultRequest:
+        cpu: "100m"
+        memory: "128Mi"
+      max:
+        cpu: "4"
+        memory: "8Gi"
+      min:
+        cpu: "50m"
+        memory: "64Mi"

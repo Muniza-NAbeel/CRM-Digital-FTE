@@ -1,0 +1,84 @@
+# Customer Success Digital FTE - Worker Dockerfile
+# Production-ready container for Kafka message processor worker
+
+FROM python:3.11-slim as base
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONFAULTHANDLER=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# ============================================================================
+# Builder Stage
+# ============================================================================
+FROM base as builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# ============================================================================
+# Production Stage
+# ============================================================================
+FROM base as production
+
+# Create non-root user for security
+RUN groupadd --gid 1000 appgroup && \
+    useradd --uid 1000 --gid appgroup --shell /bin/bash --create-home appuser
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy application code
+COPY --chown=appuser:appgroup . .
+
+# Switch to non-root user
+USER appuser
+
+# Health check - verify worker can connect to dependencies
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -c "from src.database import get_db_pool; import asyncio; asyncio.run(get_db_pool())" || exit 1
+
+# Run the worker
+CMD ["python", "-m", "src.workers.worker_runner"]
+
+# ============================================================================
+# Development Stage
+# ============================================================================
+FROM base as development
+
+# Install development dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install all dependencies
+COPY requirements.txt .
+RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Run worker with verbose logging
+CMD ["python", "-m", "src.workers.worker_runner"]

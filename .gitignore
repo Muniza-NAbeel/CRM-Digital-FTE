@@ -1,0 +1,55 @@
+# Backend folder contains all Python code and config
+backend/__pycache__/
+backend/*.py[cod]
+backend/.env
+backend/.venv/
+backend/*.db
+backend/logs/
+backend/.pytest_cache/
+backend/token.json
+backend/credentials.json
+backend/*.pem
+backend/*.key
+backend/*.log
+
+# Frontend
+frontend/web-form/node_modules/
+frontend/web-form/.next/
+frontend/web-form/.pnp/
+frontend/web-form/.pnp.js
+frontend/web-form/coverage/
+frontend/web-form/*.pem
+frontend/web-form/npm-debug.log*
+frontend/web-form/yarn-debug.log*
+frontend/web-form/yarn-error.log*
+frontend/web-form/.env.local
+frontend/web-form/.vercel/
+frontend/web-form/*.tsbuildinfo
+
+# Root level
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+*.log
+*.db
+
+# OS
+.DS_Store
+Thumbs.db
+*.pem
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Docker
+.dockerignore
+
+# Misc
+*.egg-info/
+build/
+dist/

@@ -1,0 +1,467 @@
+# Customer Success Digital FTE - Stateful Services
+# PostgreSQL and Kafka StatefulSets with persistent storage
+
+# ============================================================================
+# POSTGRESQL STATEFULSET
+# ============================================================================
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: customer-success-fte
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: standard
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: customer-success-fte
+data:
+  POSTGRES_DB: "customer_success_fte"
+  POSTGRES_USER: "postgres"
+  POSTGRES_MAX_CONNECTIONS: "200"
+  POSTGRES_SHARED_BUFFERS: "1GB"
+  POSTGRES_EFFECTIVE_CACHE_SIZE: "3GB"
+  POSTGRES_WORK_MEM: "16MB"
+  POSTGRES_MAINTENANCE_WORK_MEM: "256MB"
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-statefulset
+  namespace: customer-success-fte
+spec:
+  serviceName: postgres-service
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9187"
+    spec:
+      securityContext:
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg16
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: postgres-config
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: APP_DB_PASSWORD
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - postgres
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - postgres
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: postgres-init-scripts
+        - name: postgres-storage
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-scripts
+  namespace: customer-success-fte
+data:
+  01-schema.sql: |
+    -- Schema will be loaded from database/schema.sql
+    -- This is a placeholder - in production, use init container to copy schema
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: customer-success-fte
+  labels:
+    app: postgres
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: postgres
+      protocol: TCP
+      name: postgres
+  selector:
+    app: postgres
+  clusterIP: None
+
+# ============================================================================
+# KAFKA STATEFULSET (Using Strimzi Operator recommended for production)
+# Simplified standalone Kafka for basic deployments
+# ============================================================================
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kafka-pvc
+  namespace: customer-success-fte
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: standard
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-config
+  namespace: customer-success-fte
+data:
+  KAFKA_BROKER_ID: "1"
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+  KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+  KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+  KAFKA_NUM_PARTITIONS: "6"
+  KAFKA_DEFAULT_REPLICATION_FACTOR: "1"
+  KAFKA_LOG_RETENTION_HOURS: "168"
+  KAFKA_LOG_RETENTION_BYTES: "1073741824"
+  KAFKA_MESSAGE_MAX_BYTES: "1048576"
+  KAFKA_MAX_REQUEST_SIZE: "1048576"
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka-statefulset
+  namespace: customer-success-fte
+spec:
+  serviceName: kafka-service
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+      containers:
+        - name: kafka
+          image: confluentinc/cp-kafka:7.5.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: kafka
+              containerPort: 9092
+              protocol: TCP
+            - name: jmx
+              containerPort: 9999
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: kafka-config
+          env:
+            - name: KAFKA_ZOOKEEPER_CONNECT
+              value: "zookeeper-service:2181"
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "PLAINTEXT://kafka-service.customer-success-fte.svc.cluster.local:9092,PLAINTEXT_HOST://localhost:9092"
+            - name: KAFKA_LISTENERS
+              value: "PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:9092"
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "PLAINTEXT"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"
+          livenessProbe:
+            exec:
+              command:
+                - kafka-broker-api-versions
+                - --bootstrap-server
+                - localhost:9092
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - kafka-broker-api-versions
+                - --bootstrap-server
+                - localhost:9092
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: kafka-storage
+              mountPath: /var/lib/kafka/data
+      volumes:
+        - name: kafka-storage
+          persistentVolumeClaim:
+            claimName: kafka-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-service
+  namespace: customer-success-fte
+  labels:
+    app: kafka
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9092
+      targetPort: kafka
+      protocol: TCP
+      name: kafka
+  selector:
+    app: kafka
+  clusterIP: None
+
+# ============================================================================
+# ZOOKEEPER STATEFULSET
+# ============================================================================
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zookeeper-pvc
+  namespace: customer-success-fte
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zookeeper-config
+  namespace: customer-success-fte
+data:
+  ZOOKEEPER_CLIENT_PORT: "2181"
+  ZOOKEEPER_TICK_TIME: "2000"
+  ZOOKEEPER_INIT_LIMIT: "5"
+  ZOOKEEPER_SYNC_LIMIT: "2"
+  ZOOKEEPER_MAX_CLIENT_CNXNS: "60"
+  ZOOKEEPER_MIN_SESSION_TIMEOUT: "4000"
+  ZOOKEEPER_MAX_SESSION_TIMEOUT: "40000"
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: zookeeper-statefulset
+  namespace: customer-success-fte
+spec:
+  serviceName: zookeeper-service
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zookeeper
+  template:
+    metadata:
+      labels:
+        app: zookeeper
+    spec:
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+      containers:
+        - name: zookeeper
+          image: confluentinc/cp-zookeeper:7.5.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: client
+              containerPort: 2181
+              protocol: TCP
+            - name: follower
+              containerPort: 2888
+              protocol: TCP
+            - name: leader
+              containerPort: 3888
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: zookeeper-config
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          livenessProbe:
+            exec:
+              command:
+                - nc
+                - -z
+                - localhost
+                - "2181"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - nc
+                - -z
+                - localhost
+                - "2181"
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: zookeeper-storage
+              mountPath: /var/lib/zookeeper/data
+      volumes:
+        - name: zookeeper-storage
+          persistentVolumeClaim:
+            claimName: zookeeper-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zookeeper-service
+  namespace: customer-success-fte
+  labels:
+    app: zookeeper
+spec:
+  type: ClusterIP
+  ports:
+    - port: 2181
+      targetPort: client
+      protocol: TCP
+      name: client
+    - port: 2888
+      targetPort: follower
+      protocol: TCP
+      name: follower
+    - port: 3888
+      targetPort: leader
+      protocol: TCP
+      name: leader
+  selector:
+    app: zookeeper
+  clusterIP: None
+
+# ============================================================================
+# KAFKA TOPIC INITIALIZER JOB
+# ============================================================================
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-topic-init
+  namespace: customer-success-fte
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": hook-succeeded
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: kafka-topics
+          image: confluentinc/cp-kafka:7.5.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Waiting for Kafka to be ready..."
+              until kafka-broker-api-versions --bootstrap-server kafka-service:9092 > /dev/null 2>&1; do
+                echo "Kafka not ready, waiting..."
+                sleep 5
+              done
+              
+              echo "Creating topics..."
+              
+              kafka-topics --bootstrap-server kafka-service:9092 --create --if-not-exists \
+                --topic fte.tickets.incoming --partitions 6 --replication-factor 1
+              
+              kafka-topics --bootstrap-server kafka-service:9092 --create --if-not-exists \
+                --topic fte.tickets.outgoing --partitions 6 --replication-factor 1
+              
+              kafka-topics --bootstrap-server kafka-service:9092 --create --if-not-exists \
+                --topic fte.agent.events --partitions 3 --replication-factor 1
+              
+              kafka-topics --bootstrap-server kafka-service:9092 --create --if-not-exists \
+                --topic fte.dlq --partitions 3 --replication-factor 1
+              
+              kafka-topics --bootstrap-server kafka-service:9092 --create --if-not-exists \
+                --topic fte.metrics --partitions 3 --replication-factor 1
+              
+              echo "Topics created successfully"
+              
+              kafka-topics --bootstrap-server kafka-service:9092 --list
