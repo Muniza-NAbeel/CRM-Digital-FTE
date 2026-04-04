@@ -47,9 +47,9 @@ A **production-grade AI Customer Success Digital FTE** operating 24/7 across **G
 
 | Resource | URL | Status |
 |----------|-----|--------|
-| 🖥️ **Live Frontend** | `http://localhost:3000` | ✅ Local |
-| 🌐 **Live Backend (Swagger)** | `http://localhost:8000/docs` | ✅ Local |
-| ❤️ **Health Check** | `http://localhost:8000/health` | ✅ Local |
+| 🖥️ **Live Frontend** | https://crm-digital-fte.vercel.app | ✅ Live |
+| 🌐 **Live Backend (Swagger)** | https://muniza-nabeel-techcorp-backend.hf.space | ✅ Live |
+| ❤️ **Health Check** | https://muniza-nabeel-techcorp-backend.hf.space/health | ✅ Live |
 | 🐙 **GitHub Repository** | [github.com/Muniza-NAbeel/CRM-Digital-FTE](https://github.com/Muniza-NAbeel/CRM-Digital-FTE) | ✅ Live |
 
 ---
