@@ -74,7 +74,8 @@ export function DashboardSidebar() {
 
   const fetchDashboard = async () => {
     try {
-      const response = await fetch("http://localhost:8000/api/v1/dashboard");
+      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE_URL}/api/v1/dashboard`);
       if (!response.ok) throw new Error("Failed to fetch");
       const dashboardData = await response.json();
       setData(dashboardData);

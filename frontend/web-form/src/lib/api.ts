@@ -1,7 +1,7 @@
 import { SubmitTicketRequest, SubmitTicketResponse, TicketStatusResponse } from '@/types';
 
-const API_BASE_URL = 'http://localhost:8000';
-const API_KEY = 'dev-api-key-12345';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'dev-api-key-12345';
 
 export async function submitTicket(data: SubmitTicketRequest): Promise<SubmitTicketResponse> {
   const response = await fetch(`${API_BASE_URL}/api/v1/messages/submit`, {
