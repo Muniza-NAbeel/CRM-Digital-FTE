@@ -1,76 +1,122 @@
 #!/bin/bash
 
-# 24-Hour Load Test Runner for Customer Success Digital FTE
-# This script runs continuous load testing for 24 hours
+echo "============================================================"
+echo "Customer Success FTE - 24 Hour Stability Test"
+echo "============================================================"
+echo
+echo "Starting test at: $(date)"
+echo
 
-set -e
+# Check if Python is available
+if ! command -v python3 &> /dev/null; then
+    echo "ERROR: Python 3 is not installed or not in PATH"
+    exit 1
+fi
 
-# Configuration
-HOST="${HOST:-http://localhost:8000}"
-DURATION="${DURATION:-24h}"
-USERS="${USERS:-50}"
-SPAWN_RATE="${SPAWN_RATE:-10}"
-
-echo "========================================"
-echo "24-Hour Load Test Starting"
-echo "========================================"
-echo "Host: $HOST"
-echo "Duration: $DURATION"
-echo "Users: $USERS"
-echo "Spawn Rate: $SPAWN_RATE"
-echo "========================================"
-
-# Check if locust is installed
-if ! command -v locust &> /dev/null; then
-    echo "❌ Locust not found. Installing..."
-    pip install locust
+# Check if Node.js is available (for frontend)
+if ! command -v node &> /dev/null; then
+    echo "WARNING: Node.js not found - frontend tests will be skipped"
 fi
 
 # Create results directory
-mkdir -p test_results
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+mkdir -p load_test_results
 
-# Run load test
-echo "🚀 Starting 24-hour load test..."
-locust \
-    -f tests/test_load.py \
-    --host "$HOST" \
-    --headless \
-    --users "$USERS" \
-    --spawn-rate "$SPAWN_RATE" \
-    --run-time "$DURATION" \
-    --html "test_results/load_test_report_$TIMESTAMP.html" \
-    --csv "test_results/load_test_$TIMESTAMP" \
-    --autoquit 60 \
-    || true
+# Check if Locust is installed
+if ! command -v locust &> /dev/null; then
+    echo "Locust not found. Installing..."
+    pip3 install locust
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Failed to install Locust"
+        exit 1
+    fi
+fi
 
-echo "========================================"
-echo "✅ 24-Hour Load Test Complete!"
-echo "========================================"
-echo "Results saved to: test_results/"
-echo "  - HTML Report: test_results/load_test_report_$TIMESTAMP.html"
-echo "  - CSV Files: test_results/load_test_$TIMESTAMP*.csv"
-echo "========================================"
+# Check if pandas is installed (for analysis)
+python3 -c "import pandas" 2>/dev/null
+if [ $? -ne 0 ]; then
+    echo "Installing pandas for report generation..."
+    pip3 install pandas
+fi
 
-# Generate summary
-echo ""
-echo "📊 Test Summary:"
-echo "  - Total Duration: $DURATION"
-echo "  - Concurrent Users: $USERS"
-echo "  - Spawn Rate: $SPAWN_RATE users/second"
-echo ""
-echo "📈 Metrics to Check:"
-echo "  ✓ Response time (P95 < 3 seconds)"
-echo "  ✓ Success rate (> 99%)"
-echo "  ✓ Error rate (< 1%)"
-echo "  ✓ Requests per second"
-echo ""
-echo "🎯 Hackathon Requirements:"
-echo "  ✓ Web Form: 100+ submissions over 24h"
-echo "  ✓ Email: 50+ messages processed"
-echo "  ✓ WhatsApp: 50+ messages processed"
-echo "  ✓ Cross-channel: 10+ customers"
-echo "  ✓ Uptime: > 99.9%"
-echo "  ✓ P95 latency: < 3 seconds"
-echo "  ✓ Escalation rate: < 25%"
-echo "========================================"
+echo
+echo "============================================================"
+echo "Test Configuration"
+echo "============================================================"
+echo
+echo "Load Test Settings:"
+echo "  - Concurrent Users: 100"
+echo "  - Spawn Rate: 10 users/second"
+echo "  - Duration: 24 hours (86400 seconds)"
+echo "  - Target: http://localhost:8000"
+echo
+echo "Output:"
+echo "  - CSV Results: load_test_results/"
+echo "  - HTML Report: load_test_report.html"
+echo
+echo "============================================================"
+echo
+
+# Ask user to confirm
+echo "BEFORE STARTING:"
+echo "1. Ensure backend is running (python run_both.py)"
+echo "2. Ensure frontend is running (npm run dev)"
+echo "3. Close any other applications using port 8000"
+echo
+read -p "Press Enter to continue or Ctrl+C to cancel..."
+
+# Start load test
+echo "Starting Locust load test..."
+echo "This will run for 24 hours. Press Ctrl+C to stop early."
+echo
+
+locust -f tests/load_test.py \
+  --host=http://localhost:8000 \
+  --headless \
+  -u 100 \
+  -r 10 \
+  -t 86400s \
+  --csv=load_test_results/ \
+  --html=load_test_report.html
+
+TEST_EXIT_CODE=$?
+
+echo
+echo "Test completed at: $(date)"
+echo
+
+if [ $TEST_EXIT_CODE -ne 0 ]; then
+    echo "Load test encountered an error or was stopped early."
+    echo "Proceeding with report generation..."
+    echo
+fi
+
+# Generate report
+echo "Generating report..."
+python3 tests/analyze_load_test.py --input=load_test_results/ --output=load_test_report.html
+
+if [ $? -ne 0 ]; then
+    echo
+    echo "WARNING: Failed to generate HTML report"
+    echo "CSV files are still available in load_test_results/"
+    echo
+fi
+
+echo
+echo "============================================================"
+echo "Test Complete!"
+echo "============================================================"
+echo
+echo "Results saved to:"
+echo "  - CSV: load_test_results/"
+echo "  - HTML Report: load_test_report.html"
+echo
+echo "To view the report:"
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    echo "  open load_test_report.html"
+elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    echo "  xdg-open load_test_report.html"
+else
+    echo "  start load_test_report.html  (Windows)"
+fi
+echo
+echo "============================================================"

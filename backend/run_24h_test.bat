@@ -1,78 +1,120 @@
 @echo off
-REM 24-Hour Load Test Runner for Customer Success Digital FTE
-REM This script runs continuous load testing for 24 hours
+echo ============================================================
+echo Customer Success FTE - 24 Hour Stability Test
+echo ============================================================
+echo.
+echo Starting test at: %date% %time%
+echo.
 
-echo ========================================
-echo 24-Hour Load Test Starting
-echo ========================================
-
-REM Configuration
-set HOST=%HOST:-http://localhost:8000%
-set DURATION=%DURATION:-24h%
-set USERS=%USERS:-50%
-set SPAWN_RATE=%SPAWN_RATE:-10%
-
-echo Host: %HOST%
-echo Duration: %DURATION%
-echo Users: %USERS%
-echo Spawn Rate: %SPAWN_RATE%
-echo ========================================
-
-REM Check if locust is installed
-python -m pip show locust >nul 2>&1
+REM Check if Python is available
+python --version >nul 2>&1
 if errorlevel 1 (
-    echo Locust not found. Installing...
-    pip install locust
+    echo ERROR: Python is not installed or not in PATH
+    pause
+    exit /b 1
+)
+
+REM Check if Node.js is available (for frontend)
+node --version >nul 2>&1
+if errorlevel 1 (
+    echo WARNING: Node.js not found - frontend tests will be skipped
 )
 
 REM Create results directory
-if not exist "test_results" mkdir test_results
+mkdir load_test_results 2>nul
 
-REM Get timestamp
-for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set datetime=%%I
-set TIMESTAMP=%datetime:~0,8%_%datetime:~8,6%
+REM Check if Locust is installed
+locust --version >nul 2>&1
+if errorlevel 1 (
+    echo Locust not found. Installing...
+    pip install locust
+    if errorlevel 1 (
+        echo ERROR: Failed to install Locust
+        pause
+        exit /b 1
+    )
+)
 
-REM Run load test
-echo Starting 24-hour load test...
-locust ^
-    -f tests\test_load.py ^
-    --host %HOST% ^
-    --headless ^
-    --users %USERS% ^
-    --spawn-rate %SPAWN_RATE% ^
-    --run-time %DURATION% ^
-    --html "test_results\load_test_report_%TIMESTAMP%.html" ^
-    --csv "test_results\load_test_%TIMESTAMP%" ^
-    --autoquit 60
-
-echo ========================================
-echo 24-Hour Load Test Complete!
-echo ========================================
-echo Results saved to: test_results\
-echo   - HTML Report: test_results\load_test_report_%TIMESTAMP%.html
-echo   - CSV Files: test_results\load_test_%TIMESTAMP%*.csv
-echo ========================================
+REM Check if pandas is installed (for analysis)
+python -c "import pandas" >nul 2>&1
+if errorlevel 1 (
+    echo Installing pandas for report generation...
+    pip install pandas
+)
 
 echo.
-echo Test Summary:
-echo   - Total Duration: %DURATION%
-echo   - Concurrent Users: %USERS%
-echo   - Spawn Rate: %SPAWN_RATE% users/second
+echo ============================================================
+echo Test Configuration
+echo ============================================================
 echo.
-echo Metrics to Check:
-echo   ^✓ Response time (P95 less than 3 seconds)
-echo   ^✓ Success rate (greater than 99 percent)
-echo   ^✓ Error rate (less than 1 percent)
-echo   ^✓ Requests per second
+echo Load Test Settings:
+echo   - Concurrent Users: 100
+echo   - Spawn Rate: 10 users/second
+echo   - Duration: 24 hours (86400 seconds)
+echo   - Target: http://localhost:8000
 echo.
-echo Hackathon Requirements:
-echo   ^✓ Web Form: 100+ submissions over 24h
-echo   ^✓ Email: 50+ messages processed
-echo   ^✓ WhatsApp: 50+ messages processed
-echo   ^✓ Cross-channel: 10+ customers
-echo   ^✓ Uptime: greater than 99.9 percent
-echo   ^✓ P95 latency: less than 3 seconds
-echo   ^✓ Escalation rate: less than 25 percent
-echo ========================================
+echo Output:
+echo   - CSV Results: load_test_results/
+echo   - HTML Report: load_test_report.html
+echo.
+echo ============================================================
+echo.
 
+REM Ask user to confirm
+echo BEFORE STARTING:
+echo 1. Ensure backend is running (python run_both.py)
+echo 2. Ensure frontend is running (npm run dev)
+echo 3. Close any other applications using port 8000
+echo.
+pause
+
+REM Start load test
+echo Starting Locust load test...
+echo This will run for 24 hours. Press Ctrl+C to stop early.
+echo.
+
+locust -f tests/load_test.py ^
+  --host=http://localhost:8000 ^
+  --headless ^
+  -u 100 ^
+  -r 10 ^
+  -t 86400s ^
+  --csv=load_test_results/ ^
+  --html=load_test_report.html
+
+if errorlevel 1 (
+    echo.
+    echo Load test encountered an error or was stopped early.
+    echo Proceeding with report generation...
+    echo.
+)
+
+echo.
+echo Test completed at: %date% %time%
+echo.
+
+REM Generate report
+echo Generating report...
+python tests/analyze_load_test.py --input=load_test_results/ --output=load_test_report.html
+
+if errorlevel 1 (
+    echo.
+    echo WARNING: Failed to generate HTML report
+    echo CSV files are still available in load_test_results/
+    echo.
+)
+
+echo.
+echo ============================================================
+echo Test Complete!
+echo ============================================================
+echo.
+echo Results saved to:
+echo   - CSV: load_test_results/
+echo   - HTML Report: load_test_report.html
+echo.
+echo To view the report:
+echo   start load_test_report.html
+echo.
+echo ============================================================
 pause
