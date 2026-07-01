@@ -515,5 +515,3 @@ MIT License — see [LICENSE](LICENSE) for details.
 **Built with care** by **Muniza Nabeel** · **Hackathon 5** · **Customer Success Digital FTE**
 
 ---
-![Issues](https://img.shields.io/github/issues/Muniza-NAbeel/CRM-Digital-FTE)
-![Last Commit](https://img.shields.io/github/last-commit/Muniza-NAbeel/CRM-Digital-FTE)
